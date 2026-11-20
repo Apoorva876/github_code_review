@@ -1,0 +1,678 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Minimal non-PII user profile document anchored at /users/{userId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "photoURL", "firestoreCreatedAt", "firestoreUpdatedAt"]
+    },
+    "UserPrivateAccount": {
+      "title": "UserPrivateAccount",
+      "description": "Isolated PII account document containing user email under /users/{userId}/private/account.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "firestoreCreatedAt", "firestoreUpdatedAt"]
+    },
+    "RepositoryRecord": {
+      "title": "RepositoryRecord",
+      "description": "Connected GitHub or demo repository persisted per user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "defaultBranch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "stars": {
+          "type": "number"
+        },
+        "forks": {
+          "type": "number"
+        },
+        "openPrsCount": {
+          "type": "number"
+        },
+        "lastReviewedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "healthScore": {
+          "type": "number"
+        },
+        "isDemo": {
+          "type": "boolean"
+        },
+        "isPrivate": {
+          "type": "boolean"
+        },
+        "autoReviewEnabled": {
+          "type": "boolean"
+        },
+        "htmlUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "activitySeries": {
+          "type": "array"
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "fullName",
+        "owner",
+        "name",
+        "description",
+        "language",
+        "defaultBranch",
+        "stars",
+        "openPrsCount",
+        "lastReviewedAt",
+        "healthScore",
+        "isDemo",
+        "autoReviewEnabled",
+        "htmlUrl",
+        "activitySeries",
+        "firestoreCreatedAt",
+        "firestoreUpdatedAt"
+      ]
+    },
+    "ReviewRecord": {
+      "title": "ReviewRecord",
+      "description": "Completed or partial AI rubric code review for a PR, manual diff, or full repository.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "prNumber": {
+          "type": "number"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "repositoryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "repositoryFullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "baseBranch": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["approved", "changes_requested", "in_review"]
+        },
+        "score": {
+          "type": "number"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "rubricBreakdown": {
+          "type": "object"
+        },
+        "findings": {
+          "type": "array"
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "agentName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "source": {
+          "type": "string",
+          "enum": ["demo", "github-live", "manual-diff"]
+        },
+        "isDemo": {
+          "type": "boolean"
+        },
+        "diffPreview": {
+          "type": "string",
+          "maxLength": 8000
+        },
+        "filesChanged": {
+          "type": "number"
+        },
+        "additions": {
+          "type": "number"
+        },
+        "deletions": {
+          "type": "number"
+        },
+        "prUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "reviewScope": {
+          "type": "string",
+          "enum": ["pr-diff", "manual-diff", "repository"]
+        },
+        "analysisStatus": {
+          "type": "string",
+          "enum": ["completed", "partial"]
+        },
+        "analysisJobId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "analyzedCommitSha": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "strengths": {
+          "type": "array"
+        },
+        "agentBreakdown": {
+          "type": "array"
+        },
+        "collectionCoverage": {
+          "type": "object"
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "prNumber",
+        "title",
+        "repositoryId",
+        "repositoryFullName",
+        "branch",
+        "baseBranch",
+        "author",
+        "status",
+        "score",
+        "summary",
+        "rubricBreakdown",
+        "findings",
+        "agentId",
+        "agentName",
+        "source",
+        "isDemo",
+        "diffPreview",
+        "filesChanged",
+        "additions",
+        "deletions",
+        "createdAt",
+        "durationMs",
+        "firestoreCreatedAt",
+        "firestoreUpdatedAt"
+      ]
+    },
+    "AgentRecord": {
+      "title": "AgentRecord",
+      "description": "Configurable AI reviewer agent profile stored per user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "focus": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "thinkingLevel": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM", "HIGH"]
+        },
+        "systemPrompt": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "strictness": {
+          "type": "string",
+          "enum": ["strict", "balanced", "advisory"]
+        },
+        "reviewsRun": {
+          "type": "number"
+        },
+        "avgFindingsPerPr": {
+          "type": "number"
+        },
+        "isDemo": {
+          "type": "boolean"
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "name",
+        "focus",
+        "description",
+        "model",
+        "thinkingLevel",
+        "systemPrompt",
+        "enabled",
+        "strictness",
+        "reviewsRun",
+        "avgFindingsPerPr",
+        "isDemo",
+        "firestoreCreatedAt",
+        "firestoreUpdatedAt"
+      ]
+    },
+    "AnalysisJobRecord": {
+      "title": "AnalysisJobRecord",
+      "description": "Persisted repository multi-agent background analysis job history.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "repositoryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "repositoryFullName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "collecting_files",
+            "running_agents",
+            "synthesizing",
+            "completed",
+            "partial",
+            "failed"
+          ]
+        },
+        "progress": {
+          "type": "number"
+        },
+        "currentStep": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "startedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "completedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "analyzedCommitSha": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "totalTreeEntries": {
+          "type": "number"
+        },
+        "eligibleFiles": {
+          "type": "number"
+        },
+        "filesCollected": {
+          "type": "number"
+        },
+        "filesAnalyzed": {
+          "type": "number"
+        },
+        "filesSkipped": {
+          "type": "number"
+        },
+        "filesTruncated": {
+          "type": "number"
+        },
+        "totalChunks": {
+          "type": "number"
+        },
+        "completedChunks": {
+          "type": "number"
+        },
+        "totalAgents": {
+          "type": "number"
+        },
+        "completedAgents": {
+          "type": "number"
+        },
+        "failedAgents": {
+          "type": "number"
+        },
+        "agentBreakdown": {
+          "type": "array"
+        },
+        "collectionCoverage": {
+          "type": "object"
+        },
+        "resultReviewId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "repositoryId",
+        "repositoryFullName",
+        "branch",
+        "status",
+        "progress",
+        "currentStep",
+        "message",
+        "createdAt",
+        "updatedAt",
+        "totalTreeEntries",
+        "eligibleFiles",
+        "filesCollected",
+        "filesAnalyzed",
+        "filesSkipped",
+        "filesTruncated",
+        "totalChunks",
+        "completedChunks",
+        "totalAgents",
+        "completedAgents",
+        "failedAgents",
+        "agentBreakdown",
+        "firestoreCreatedAt",
+        "firestoreUpdatedAt"
+      ]
+    },
+    "WorkspaceSettingsRecord": {
+      "title": "WorkspaceSettingsRecord",
+      "description": "User workspace preferences and daily activity metrics stored at /users/{userId}/settings/workspace.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "organizationName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "defaultAgentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "defaultModel": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "autoPostPrSummary": {
+          "type": "boolean"
+        },
+        "minimumPassScore": {
+          "type": "number"
+        },
+        "dailyActivity": {
+          "type": "array"
+        },
+        "firestoreCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "firestoreUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "organizationName",
+        "defaultAgentId",
+        "defaultModel",
+        "autoPostPrSummary",
+        "minimumPassScore",
+        "dailyActivity",
+        "firestoreCreatedAt",
+        "firestoreUpdatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Per-user root profile document (non-PII display info)."
+    },
+    "/users/{userId}/private/account": {
+      "schema": {
+        "$ref": "#/entities/UserPrivateAccount"
+      },
+      "description": "Isolated PII document storing user email under strict owner-only access."
+    },
+    "/users/{userId}/repositories/{repositoryId}": {
+      "schema": {
+        "$ref": "#/entities/RepositoryRecord"
+      },
+      "description": "Connected repositories owned by the authenticated user."
+    },
+    "/users/{userId}/reviews/{reviewId}": {
+      "schema": {
+        "$ref": "#/entities/ReviewRecord"
+      },
+      "description": "Code reviews and findings persisted for the authenticated user."
+    },
+    "/users/{userId}/agents/{agentId}": {
+      "schema": {
+        "$ref": "#/entities/AgentRecord"
+      },
+      "description": "AI agent configurations persisted for the authenticated user."
+    },
+    "/users/{userId}/analysisJobs/{jobId}": {
+      "schema": {
+        "$ref": "#/entities/AnalysisJobRecord"
+      },
+      "description": "Full-repository analysis job records persisted for the authenticated user."
+    },
+    "/users/{userId}/settings/workspace": {
+      "schema": {
+        "$ref": "#/entities/WorkspaceSettingsRecord"
+      },
+      "description": "Workspace preferences and daily activity timeline (excludes any API secrets/tokens)."
+    }
+  }
+}

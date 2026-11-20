@@ -1,0 +1,6 @@
+{
+  "name": "CodeRubric",
+  "description": "AI-powered GitHub code reviewer and engineering rubric dashboard powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

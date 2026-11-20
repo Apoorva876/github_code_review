@@ -1,0 +1,443 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4 Global Safety Net: Deny all reads and writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    function hasParentUser(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidCreatedTimestamps(data) {
+      return data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp &&
+        data.firestoreCreatedAt == request.time &&
+        data.firestoreUpdatedAt == request.time;
+    }
+
+    function isValidUpdatedTimestamps(data, prev) {
+      return data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp &&
+        data.firestoreCreatedAt == prev.firestoreCreatedAt &&
+        data.firestoreUpdatedAt == request.time;
+    }
+
+    // Entity Validators
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'photoURL', 'firestoreCreatedAt', 'firestoreUpdatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'firestoreCreatedAt', 'firestoreUpdatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.displayName is string && data.displayName.size() <= 120 &&
+        data.photoURL is string && data.photoURL.size() <= 500 &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidUserPrivateAccount(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'firestoreCreatedAt', 'firestoreUpdatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'firestoreCreatedAt', 'firestoreUpdatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidRepository(data, repoId, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'fullName', 'owner', 'name', 'description',
+          'language', 'defaultBranch', 'stars', 'openPrsCount', 'lastReviewedAt',
+          'healthScore', 'isDemo', 'autoReviewEnabled', 'htmlUrl', 'activitySeries',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'fullName', 'owner', 'name', 'description',
+          'language', 'defaultBranch', 'stars', 'forks', 'openPrsCount', 'lastReviewedAt',
+          'healthScore', 'isDemo', 'isPrivate', 'autoReviewEnabled', 'htmlUrl', 'activitySeries',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == repoId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == userId &&
+        data.ownerUid == request.auth.uid &&
+        data.fullName is string && data.fullName.size() >= 3 && data.fullName.size() <= 200 &&
+        data.owner is string && data.owner.size() >= 1 && data.owner.size() <= 100 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.description is string && data.description.size() <= 1000 &&
+        data.language is string && data.language.size() <= 64 &&
+        data.defaultBranch is string && data.defaultBranch.size() >= 1 && data.defaultBranch.size() <= 255 &&
+        data.stars is number && data.stars >= 0 &&
+        (!('forks' in data) || (data.forks is number && data.forks >= 0)) &&
+        data.openPrsCount is number && data.openPrsCount >= 0 &&
+        data.lastReviewedAt is string && data.lastReviewedAt.size() <= 64 &&
+        data.healthScore is number && data.healthScore >= 0 && data.healthScore <= 100 &&
+        data.isDemo is bool &&
+        (!('isPrivate' in data) || data.isPrivate is bool) &&
+        data.autoReviewEnabled is bool &&
+        data.htmlUrl is string && data.htmlUrl.size() <= 500 &&
+        data.activitySeries is list && data.activitySeries.size() <= 30 &&
+        (data.activitySeries.size() == 0 || data.activitySeries[0] is number) &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidReview(data, reviewId, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'prNumber', 'title', 'repositoryId', 'repositoryFullName',
+          'branch', 'baseBranch', 'author', 'status', 'score', 'summary',
+          'rubricBreakdown', 'findings', 'agentId', 'agentName', 'source',
+          'isDemo', 'diffPreview', 'filesChanged', 'additions', 'deletions',
+          'createdAt', 'durationMs', 'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'prNumber', 'title', 'repositoryId', 'repositoryFullName',
+          'branch', 'baseBranch', 'author', 'status', 'score', 'summary',
+          'rubricBreakdown', 'findings', 'agentId', 'agentName', 'source',
+          'isDemo', 'diffPreview', 'filesChanged', 'additions', 'deletions', 'prUrl',
+          'createdAt', 'durationMs', 'reviewScope', 'analysisStatus', 'analysisJobId',
+          'analyzedCommitSha', 'strengths', 'agentBreakdown', 'collectionCoverage',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == reviewId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == userId &&
+        data.ownerUid == request.auth.uid &&
+        data.prNumber is number && data.prNumber >= 0 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+        isValidId(data.repositoryId) &&
+        data.repositoryFullName is string && data.repositoryFullName.size() >= 1 && data.repositoryFullName.size() <= 200 &&
+        data.branch is string && data.branch.size() <= 255 &&
+        data.baseBranch is string && data.baseBranch.size() <= 255 &&
+        data.author is string && data.author.size() <= 120 &&
+        data.status in ['approved', 'changes_requested', 'in_review'] &&
+        data.score is number && data.score >= 0 && data.score <= 100 &&
+        data.summary is string && data.summary.size() <= 4000 &&
+        data.rubricBreakdown is map &&
+        data.findings is list && data.findings.size() <= 100 &&
+        (data.findings.size() == 0 || data.findings[0] is map) &&
+        isValidId(data.agentId) &&
+        data.agentName is string && data.agentName.size() <= 120 &&
+        data.source in ['demo', 'github-live', 'manual-diff'] &&
+        data.isDemo is bool &&
+        data.diffPreview is string && data.diffPreview.size() <= 8000 &&
+        data.filesChanged is number && data.filesChanged >= 0 &&
+        data.additions is number && data.additions >= 0 &&
+        data.deletions is number && data.deletions >= 0 &&
+        (!('prUrl' in data) || (data.prUrl is string && data.prUrl.size() <= 500)) &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.durationMs is number && data.durationMs >= 0 &&
+        (!('reviewScope' in data) || data.reviewScope in ['pr-diff', 'manual-diff', 'repository']) &&
+        (!('analysisStatus' in data) || data.analysisStatus in ['completed', 'partial']) &&
+        (!('analysisJobId' in data) || (data.analysisJobId is string && data.analysisJobId.size() <= 128)) &&
+        (!('analyzedCommitSha' in data) || (data.analyzedCommitSha is string && data.analyzedCommitSha.size() <= 64)) &&
+        (!('strengths' in data) || (data.strengths is list && data.strengths.size() <= 30 && (data.strengths.size() == 0 || data.strengths[0] is string))) &&
+        (!('agentBreakdown' in data) || (data.agentBreakdown is list && data.agentBreakdown.size() <= 10 && (data.agentBreakdown.size() == 0 || data.agentBreakdown[0] is map))) &&
+        (!('collectionCoverage' in data) || data.collectionCoverage is map) &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidAgent(data, agentId, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'name', 'focus', 'description', 'model',
+          'thinkingLevel', 'systemPrompt', 'enabled', 'strictness',
+          'reviewsRun', 'avgFindingsPerPr', 'isDemo',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'name', 'focus', 'description', 'model',
+          'thinkingLevel', 'systemPrompt', 'enabled', 'strictness',
+          'reviewsRun', 'avgFindingsPerPr', 'isDemo',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == agentId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == userId &&
+        data.ownerUid == request.auth.uid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.focus is string && data.focus.size() <= 300 &&
+        data.description is string && data.description.size() <= 1000 &&
+        data.model is string && data.model.size() <= 80 &&
+        data.thinkingLevel in ['LOW', 'MEDIUM', 'HIGH'] &&
+        data.systemPrompt is string && data.systemPrompt.size() >= 1 && data.systemPrompt.size() <= 4000 &&
+        data.enabled is bool &&
+        data.strictness in ['strict', 'balanced', 'advisory'] &&
+        data.reviewsRun is number && data.reviewsRun >= 0 &&
+        data.avgFindingsPerPr is number && data.avgFindingsPerPr >= 0 &&
+        data.isDemo is bool &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidAnalysisJob(data, jobId, userId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'repositoryId', 'repositoryFullName', 'branch',
+          'status', 'progress', 'currentStep', 'message', 'createdAt', 'updatedAt',
+          'totalTreeEntries', 'eligibleFiles', 'filesCollected', 'filesAnalyzed',
+          'filesSkipped', 'filesTruncated', 'totalChunks', 'completedChunks',
+          'totalAgents', 'completedAgents', 'failedAgents', 'agentBreakdown',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'repositoryId', 'repositoryFullName', 'branch',
+          'status', 'progress', 'currentStep', 'message', 'createdAt', 'startedAt',
+          'updatedAt', 'completedAt', 'analyzedCommitSha', 'totalTreeEntries',
+          'eligibleFiles', 'filesCollected', 'filesAnalyzed', 'filesSkipped',
+          'filesTruncated', 'totalChunks', 'completedChunks', 'totalAgents',
+          'completedAgents', 'failedAgents', 'agentBreakdown', 'collectionCoverage',
+          'resultReviewId', 'error', 'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == jobId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == userId &&
+        data.ownerUid == request.auth.uid &&
+        isValidId(data.repositoryId) &&
+        data.repositoryFullName is string && data.repositoryFullName.size() <= 200 &&
+        data.branch is string && data.branch.size() <= 255 &&
+        data.status in ['queued', 'collecting_files', 'running_agents', 'synthesizing', 'completed', 'partial', 'failed'] &&
+        data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+        data.currentStep is string && data.currentStep.size() <= 64 &&
+        data.message is string && data.message.size() <= 1000 &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        (!('startedAt' in data) || data.startedAt == null || (data.startedAt is string && data.startedAt.size() <= 64)) &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('completedAt' in data) || data.completedAt == null || (data.completedAt is string && data.completedAt.size() <= 64)) &&
+        (!('analyzedCommitSha' in data) || data.analyzedCommitSha == null || (data.analyzedCommitSha is string && data.analyzedCommitSha.size() <= 64)) &&
+        data.totalTreeEntries is number && data.totalTreeEntries >= 0 &&
+        data.eligibleFiles is number && data.eligibleFiles >= 0 &&
+        data.filesCollected is number && data.filesCollected >= 0 &&
+        data.filesAnalyzed is number && data.filesAnalyzed >= 0 &&
+        data.filesSkipped is number && data.filesSkipped >= 0 &&
+        data.filesTruncated is number && data.filesTruncated >= 0 &&
+        data.totalChunks is number && data.totalChunks >= 0 &&
+        data.completedChunks is number && data.completedChunks >= 0 &&
+        data.totalAgents is number && data.totalAgents >= 0 &&
+        data.completedAgents is number && data.completedAgents >= 0 &&
+        data.failedAgents is number && data.failedAgents >= 0 &&
+        data.agentBreakdown is list && data.agentBreakdown.size() <= 10 &&
+        (data.agentBreakdown.size() == 0 || data.agentBreakdown[0] is map) &&
+        (!('collectionCoverage' in data) || data.collectionCoverage == null || data.collectionCoverage is map) &&
+        (!('resultReviewId' in data) || data.resultReviewId == null || (data.resultReviewId is string && data.resultReviewId.size() <= 128)) &&
+        (!('error' in data) || data.error == null || (data.error is string && data.error.size() <= 1000)) &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    function isValidWorkspaceSettings(data, userId) {
+      return data.keys().hasAll([
+          'ownerUid', 'organizationName', 'defaultAgentId', 'defaultModel',
+          'autoPostPrSummary', 'minimumPassScore', 'dailyActivity',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerUid', 'organizationName', 'defaultAgentId', 'defaultModel',
+          'autoPostPrSummary', 'minimumPassScore', 'dailyActivity',
+          'firestoreCreatedAt', 'firestoreUpdatedAt'
+        ]) &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == userId &&
+        data.ownerUid == request.auth.uid &&
+        data.organizationName is string && data.organizationName.size() >= 1 && data.organizationName.size() <= 120 &&
+        data.defaultAgentId is string && data.defaultAgentId.size() <= 128 &&
+        data.defaultModel is string && data.defaultModel.size() <= 80 &&
+        data.autoPostPrSummary is bool &&
+        data.minimumPassScore is number && data.minimumPassScore >= 0 && data.minimumPassScore <= 100 &&
+        data.dailyActivity is list && data.dailyActivity.size() <= 14 &&
+        (data.dailyActivity.size() == 0 || data.dailyActivity[0] is map) &&
+        data.firestoreCreatedAt is timestamp &&
+        data.firestoreUpdatedAt is timestamp;
+    }
+
+    // Collection Match Rules
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        isValidCreatedTimestamps(incoming());
+      allow update: if isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        isValidUpdatedTimestamps(incoming(), existing()) &&
+        incoming().uid == existing().uid &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'firestoreUpdatedAt']);
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow get: if docId == 'account' && isOwner(userId);
+        allow list: if false;
+        allow create: if docId == 'account' &&
+          isOwner(userId) &&
+          hasParentUser(userId) &&
+          isValidUserPrivateAccount(incoming(), userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if docId == 'account' &&
+          isOwner(userId) &&
+          isValidUserPrivateAccount(incoming(), userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().uid == existing().uid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['email', 'firestoreUpdatedAt']);
+        allow delete: if false;
+      }
+
+      match /repositories/{repositoryId} {
+        allow get: if isOwner(userId) && isValidId(repositoryId);
+        allow list: if isVerifiedUser() &&
+          isValidId(userId) &&
+          request.auth.uid == userId &&
+          resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(repositoryId) &&
+          hasParentUser(userId) &&
+          isValidRepository(incoming(), repositoryId, userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if isOwner(userId) &&
+          isValidId(repositoryId) &&
+          isValidRepository(incoming(), repositoryId, userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['autoReviewEnabled', 'firestoreUpdatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastReviewedAt', 'healthScore', 'activitySeries', 'openPrsCount', 'stars', 'forks', 'description', 'defaultBranch', 'firestoreUpdatedAt'])
+          );
+        allow delete: if isOwner(userId) && isValidId(repositoryId);
+      }
+
+      match /reviews/{reviewId} {
+        allow get: if isOwner(userId) && isValidId(reviewId);
+        allow list: if isVerifiedUser() &&
+          isValidId(userId) &&
+          request.auth.uid == userId &&
+          resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(reviewId) &&
+          hasParentUser(userId) &&
+          isValidReview(incoming(), reviewId, userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if isOwner(userId) &&
+          isValidId(reviewId) &&
+          isValidReview(incoming(), reviewId, userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().repositoryId == existing().repositoryId &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'firestoreUpdatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['findings', 'firestoreUpdatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'findings', 'firestoreUpdatedAt'])
+          );
+        allow delete: if isOwner(userId) && isValidId(reviewId);
+      }
+
+      match /agents/{agentId} {
+        allow get: if isOwner(userId) && isValidId(agentId);
+        allow list: if isVerifiedUser() &&
+          isValidId(userId) &&
+          request.auth.uid == userId &&
+          resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(agentId) &&
+          hasParentUser(userId) &&
+          isValidAgent(incoming(), agentId, userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if isOwner(userId) &&
+          isValidId(agentId) &&
+          isValidAgent(incoming(), agentId, userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['enabled', 'strictness', 'thinkingLevel', 'systemPrompt', 'focus', 'firestoreUpdatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['reviewsRun', 'avgFindingsPerPr', 'firestoreUpdatedAt'])
+          );
+        allow delete: if isOwner(userId) && isValidId(agentId);
+      }
+
+      match /analysisJobs/{jobId} {
+        allow get: if isOwner(userId) && isValidId(jobId);
+        allow list: if isVerifiedUser() &&
+          isValidId(userId) &&
+          request.auth.uid == userId &&
+          resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(jobId) &&
+          hasParentUser(userId) &&
+          isValidAnalysisJob(incoming(), jobId, userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if isOwner(userId) &&
+          isValidId(jobId) &&
+          isValidAnalysisJob(incoming(), jobId, userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().repositoryId == existing().repositoryId &&
+          !(existing().status in ['completed', 'partial', 'failed']) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'progress', 'currentStep', 'message', 'startedAt',
+            'updatedAt', 'completedAt', 'analyzedCommitSha', 'totalTreeEntries',
+            'eligibleFiles', 'filesCollected', 'filesAnalyzed', 'filesSkipped',
+            'filesTruncated', 'totalChunks', 'completedChunks', 'totalAgents',
+            'completedAgents', 'failedAgents', 'agentBreakdown', 'collectionCoverage',
+            'resultReviewId', 'error', 'firestoreUpdatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(jobId);
+      }
+
+      match /settings/{docId} {
+        allow get: if docId == 'workspace' && isOwner(userId);
+        allow list: if false;
+        allow create: if docId == 'workspace' &&
+          isOwner(userId) &&
+          hasParentUser(userId) &&
+          isValidWorkspaceSettings(incoming(), userId) &&
+          isValidCreatedTimestamps(incoming());
+        allow update: if docId == 'workspace' &&
+          isOwner(userId) &&
+          isValidWorkspaceSettings(incoming(), userId) &&
+          isValidUpdatedTimestamps(incoming(), existing()) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'organizationName', 'defaultAgentId', 'defaultModel',
+            'autoPostPrSummary', 'minimumPassScore', 'dailyActivity',
+            'firestoreUpdatedAt'
+          ]);
+        allow delete: if false;
+      }
+    }
+  }
+}
