@@ -5,12 +5,18 @@ import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes/api.ts';
 import { authApiRouter, oauthCallbackRouter } from './server/routes/auth.ts';
-import { recoverInterruptedAnalysisJobs } from './server/store.ts';
+import {
+  recoverInterruptedAnalysisJobs,
+  recoverInterruptedIntelligenceJobs,
+} from './server/store.ts';
 
 async function startServer() {
   const recoveredJobs = recoverInterruptedAnalysisJobs();
-  if (recoveredJobs > 0) {
-    console.warn(`Marked ${recoveredJobs} interrupted analysis job(s) as failed after server restart.`);
+  const recoveredIntelJobs = recoverInterruptedIntelligenceJobs();
+  if (recoveredJobs > 0 || recoveredIntelJobs > 0) {
+    console.warn(
+      `Marked ${recoveredJobs} interrupted analysis job(s) and ${recoveredIntelJobs} intelligence job(s) as failed after server restart.`
+    );
   }
 
   const app = express();

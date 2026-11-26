@@ -16,9 +16,15 @@ import {
   fetchGitHubRepository,
   fetchGitHubRepositoryDetails,
   GitHubApiError,
+  isSensitiveRepoPath,
   isValidBranchName,
   parseRepoFullName,
 } from '../services/githubService.ts';
+import {
+  startRepositoryIntelligenceJob,
+  type IntelligenceBundleCollectorFn,
+} from '../services/intelligenceJobService.ts';
+import type { RepositoryIntelligenceOptions } from '../services/repositoryIntelligenceService.ts';
 import {
   startRepositoryAnalysisJob,
   toPublicAnalysisJob,
@@ -27,9 +33,26 @@ import {
 } from '../services/repositoryAnalysisJobService.ts';
 import type { RepositoryAnalysisOptions } from '../services/repositoryAnalysisService.ts';
 import {
+  authenticateFirebaseRequest,
+  FirebaseAuthError,
+  verifyFirebaseIdToken,
+  type FirebaseTokenVerifier,
+} from '../services/firebaseAuthMiddleware.ts';
+import {
+  answerRepositoryQuestion,
+  createChatMessageRecord,
+  type RepositoryQaOptions,
+} from '../services/repositoryQaService.ts';
+import {
   addRepository,
   addReview,
+  appendIntelligenceChatMessages,
+  clearIntelligenceChatHistory,
   getAnalysisJobById,
+  getIntelligenceChatHistory,
+  getIntelligenceJobById,
+  getIntelligenceReportById,
+  getLatestIntelligenceReportForRepository,
   getStore,
   hydrateWorkspaceStore,
   listAnalysisJobsForRepository,
@@ -46,12 +69,17 @@ import type { CodeReview, ReviewStatus } from '../types.ts';
 export interface ApiRouterDeps {
   collectorFn?: SourceCollectorFn;
   analysisOptions?: RepositoryAnalysisOptions;
+  intelligenceCollectorFn?: IntelligenceBundleCollectorFn;
+  intelligenceOptions?: RepositoryIntelligenceOptions;
   verifyAccessFn?: typeof verifyRepositoryAccessCached;
+  verifyFirebaseTokenFn?: FirebaseTokenVerifier;
+  qaOptions?: RepositoryQaOptions;
 }
 
 export function createApiRouter(deps?: ApiRouterDeps): Router {
   const apiRouter = Router();
   const verifyAccess = deps?.verifyAccessFn ?? verifyRepositoryAccessCached;
+  const verifyFirebaseToken = deps?.verifyFirebaseTokenFn ?? verifyFirebaseIdToken;
 
 function resolveGitHubToken(req: Request): string | undefined {
   const session = getSessionFromRequest(req);
@@ -653,6 +681,306 @@ apiRouter.get('/repositories/:id/analysis-jobs', async (req, res) => {
     isDemo: false,
     jobs: visibleJobs.map(toPublicAnalysisJob),
   });
+});
+
+apiRouter.post('/repositories/:id/intelligence', async (req, res) => {
+  const session = getSessionFromRequest(req);
+  const token = resolveGitHubToken(req);
+
+  const state = getStore();
+  const repo = state.repositories.find((r) => r.id === req.params.id);
+  if (!repo) {
+    return res.status(404).json({ error: 'Repository not found.' });
+  }
+
+  if (repo.isDemo) {
+    return res.status(400).json({
+      error:
+        'Demo repositories do not have live source trees. Enter a public GitHub repository URL to run Repository Intelligence.',
+      isDemo: true,
+    });
+  }
+
+  if (repo.isPrivate && !token) {
+    return res.status(401).json({
+      error:
+        'GitHub authentication required to run intelligence analysis on private repositories.',
+    });
+  }
+
+  const bodyObj =
+    req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? (req.body as Record<string, unknown>)
+      : {};
+
+  let branch = repo.defaultBranch || 'main';
+  if (typeof bodyObj.branch === 'string' && bodyObj.branch.trim()) {
+    if (!isValidBranchName(bodyObj.branch)) {
+      return res.status(400).json({ error: 'Invalid branch name.' });
+    }
+    branch = bodyObj.branch.trim();
+  }
+
+  const forceRefresh = Boolean(bodyObj.forceRefresh);
+
+  try {
+    const access = await verifyAccess(repo.fullName, token);
+    if (access.isPrivate && !token) {
+      return res.status(401).json({
+        error:
+          'GitHub authentication required to run intelligence analysis on private repositories.',
+      });
+    }
+  } catch (err) {
+    return sendGitHubError(res, err, 'Failed to verify GitHub repository access.');
+  }
+
+  const job = startRepositoryIntelligenceJob({
+    repository: repo,
+    branch,
+    token,
+    forceRefresh,
+    requestedByUserId: session?.user.id ?? null,
+    collectorFn: deps?.intelligenceCollectorFn,
+    intelligenceOptions: deps?.intelligenceOptions,
+  });
+
+  return res.status(202).json({ job });
+});
+
+apiRouter.get('/intelligence-jobs/:jobId', (req, res) => {
+  const job = getIntelligenceJobById(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Repository intelligence job not found.' });
+  }
+  return res.json({ job });
+});
+
+apiRouter.get('/intelligence-reports/:reportId', (req, res) => {
+  const report = getIntelligenceReportById(req.params.reportId);
+  if (!report) {
+    return res.status(404).json({ error: 'Repository intelligence report not found.' });
+  }
+  return res.json({ report });
+});
+
+apiRouter.get('/repositories/:id/intelligence', (req, res) => {
+  const state = getStore();
+  const repo = state.repositories.find((r) => r.id === req.params.id);
+  const report = getLatestIntelligenceReportForRepository(req.params.id, repo?.fullName);
+  if (!report) {
+    return res.status(404).json({ error: 'No repository intelligence report found yet.' });
+  }
+  return res.json({ report });
+});
+
+apiRouter.get('/repositories/:id/intelligence/file', async (req, res) => {
+  const state = getStore();
+  const repo = state.repositories.find((r) => r.id === req.params.id);
+  if (!repo) {
+    return res.status(404).json({ error: 'Repository not found.' });
+  }
+
+  const rawPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+  const cleanPath = rawPath.replace(/^\/+/, '');
+  if (!cleanPath || cleanPath.includes('..')) {
+    return res.status(400).json({ error: 'Valid file path is required.' });
+  }
+
+  if (isSensitiveRepoPath(cleanPath)) {
+    return res.status(403).json({
+      error: 'Sensitive environment, credential, or private key files are redacted and blocked from inspection.',
+      isSensitive: true,
+    });
+  }
+
+  const latestReport = getLatestIntelligenceReportForRepository(repo.id, repo.fullName);
+  const cached = latestReport?.cachedFiles?.[cleanPath];
+  if (cached) {
+    return res.json({
+      source: 'cache',
+      file: {
+        name: cleanPath.split('/').pop() || cleanPath,
+        path: cleanPath,
+        size: cached.size,
+        lineCount: cached.lineCount,
+        content: cached.rawContent,
+        isBinary: false,
+        truncated: cached.truncated,
+        language: cached.language,
+        purpose: cached.purpose,
+        layer: cached.layer,
+        symbols: cached.symbols,
+        relatedComponentIds: cached.relatedComponentIds,
+        htmlUrl: `${repo.htmlUrl}/blob/${encodeURIComponent(latestReport?.branch || repo.defaultBranch)}/${cleanPath}`,
+      },
+    });
+  }
+
+  try {
+    const token = resolveGitHubToken(req);
+    const ref =
+      typeof req.query.ref === 'string' && req.query.ref.trim()
+        ? req.query.ref.trim()
+        : latestReport?.analyzedCommitSha || repo.defaultBranch;
+
+    const result = await fetchGitHubContents(
+      repo.fullName,
+      { path: cleanPath, ref },
+      token
+    );
+
+    if (result.kind !== 'file' || !result.file) {
+      return res.status(400).json({ error: 'Requested path is a directory, not a file.' });
+    }
+
+    const treeMatch = latestReport?.treeNodes.find((n) => n.path === cleanPath);
+
+    return res.json({
+      source: 'github-live',
+      file: {
+        name: result.file.name,
+        path: result.file.path,
+        size: result.file.size,
+        lineCount: result.file.content ? result.file.content.split('\n').length : 0,
+        content: result.file.isBinary ? '' : redactSensitiveText(result.file.content),
+        isBinary: result.file.isBinary,
+        truncated: result.file.truncated,
+        language: treeMatch?.language || 'Text',
+        purpose: treeMatch?.purpose || 'Loaded directly from GitHub repository tree.',
+        layer: 'module',
+        symbols: [],
+        relatedComponentIds: [],
+        htmlUrl: result.file.htmlUrl,
+      },
+    });
+  } catch (err) {
+    return sendGitHubError(res, err, 'Failed to fetch repository file contents.');
+  }
+});
+
+apiRouter.get('/repositories/:id/intelligence/qa', async (req, res) => {
+  try {
+    const firebaseUser = await authenticateFirebaseRequest(req, verifyFirebaseToken);
+    const state = getStore();
+    const repo = state.repositories.find((r) => r.id === req.params.id);
+    if (!repo) {
+      return res.status(404).json({ error: 'Repository not found.' });
+    }
+
+    const report = getLatestIntelligenceReportForRepository(repo.id, repo.fullName);
+    const messages = getIntelligenceChatHistory(firebaseUser.uid, repo.id);
+    return res.json({
+      hasReport: Boolean(report),
+      repositoryId: repo.id,
+      userId: firebaseUser.uid,
+      messages,
+    });
+  } catch (err) {
+    if (err instanceof FirebaseAuthError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    return res.status(500).json({ error: 'Failed to load Repository Q&A history.' });
+  }
+});
+
+apiRouter.post('/repositories/:id/intelligence/qa', async (req, res) => {
+  try {
+    const firebaseUser = await authenticateFirebaseRequest(req, verifyFirebaseToken);
+    const state = getStore();
+    const repo = state.repositories.find((r) => r.id === req.params.id);
+    if (!repo) {
+      return res.status(404).json({ error: 'Repository not found.' });
+    }
+
+    if (
+      !req.body ||
+      typeof req.body !== 'object' ||
+      Array.isArray(req.body) ||
+      typeof (req.body as { question?: unknown }).question !== 'string'
+    ) {
+      return res.status(400).json({ error: 'A text question is required.' });
+    }
+
+    const question = (req.body as { question: string }).question.trim();
+    if (!question) {
+      return res.status(400).json({ error: 'Please enter a non-empty question about this repository.' });
+    }
+    if (question.length > 2000) {
+      return res.status(400).json({ error: 'Question must be 2,000 characters or fewer.' });
+    }
+
+    const report = getLatestIntelligenceReportForRepository(repo.id, repo.fullName);
+    if (!report) {
+      return res.status(404).json({
+        error: 'Analyze this repository with Repository Intelligence before asking questions.',
+      });
+    }
+
+    const existingHistory = getIntelligenceChatHistory(firebaseUser.uid, repo.id);
+    const qaResult = await answerRepositoryQuestion({
+      report,
+      question,
+      history: existingHistory,
+      ...(deps?.qaOptions ?? {}),
+    });
+
+    const userMsg = createChatMessageRecord({
+      role: 'user',
+      content: question,
+      userId: firebaseUser.uid,
+      repositoryId: repo.id,
+    });
+
+    const assistantMsg = createChatMessageRecord({
+      role: 'assistant',
+      content: qaResult.answer,
+      userId: firebaseUser.uid,
+      repositoryId: repo.id,
+      references: qaResult.references,
+      evidenceStatus: qaResult.evidenceStatus,
+      insufficientEvidenceReason: qaResult.insufficientEvidenceReason,
+    });
+
+    const updatedMessages = appendIntelligenceChatMessages(firebaseUser.uid, repo.id, [
+      userMsg,
+      assistantMsg,
+    ]);
+
+    return res.status(201).json({
+      message: assistantMsg,
+      messages: updatedMessages,
+      retrievedFileCount: qaResult.retrievedFileCount,
+    });
+  } catch (err) {
+    if (err instanceof FirebaseAuthError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    const status =
+      typeof (err as { status?: unknown })?.status === 'number'
+        ? (err as { status: number }).status
+        : 500;
+    return res.status(status).json({ error: toSafeGeminiErrorMessage(err) });
+  }
+});
+
+apiRouter.delete('/repositories/:id/intelligence/qa', async (req, res) => {
+  try {
+    const firebaseUser = await authenticateFirebaseRequest(req, verifyFirebaseToken);
+    const state = getStore();
+    const repo = state.repositories.find((r) => r.id === req.params.id);
+    if (!repo) {
+      return res.status(404).json({ error: 'Repository not found.' });
+    }
+
+    clearIntelligenceChatHistory(firebaseUser.uid, repo.id);
+    return res.json({ ok: true, repositoryId: repo.id });
+  } catch (err) {
+    if (err instanceof FirebaseAuthError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    return res.status(500).json({ error: 'Failed to clear Repository Q&A history.' });
+  }
 });
 
 apiRouter.get('/repositories/:id/pulls', async (req, res) => {

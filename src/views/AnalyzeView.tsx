@@ -6,14 +6,16 @@ import type {
   GitHubPullRequestSummary,
   GitHubRateLimit,
   Repository,
-  RepositoryAnalysisJob,
+  RepositoryIntelligenceJob,
+  RepositoryIntelligenceReport,
 } from '../types';
 import { parsePublicGitHubRepoUrl, type ParsedGitHubRepoUrl } from '../utils/githubUrl';
 
 export interface RepositoryIntelligenceTarget {
   repository: Repository;
   parsed: ParsedGitHubRepoUrl;
-  job: RepositoryAnalysisJob;
+  job: RepositoryIntelligenceJob;
+  report?: RepositoryIntelligenceReport | null;
 }
 
 export interface PullRequestReviewTarget {
@@ -58,7 +60,7 @@ export function AnalyzeView({
       const { repository } = await api.connectRepository(validation.normalizedUrl);
       onRepositoryVerified(repository);
 
-      const { job } = await api.startRepositoryAnalysis(
+      const { job } = await api.startRepositoryIntelligence(
         repository.id,
         repository.defaultBranch
       );
@@ -72,7 +74,7 @@ export function AnalyzeView({
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to verify repository or start repository analysis.'
+          : 'Unable to verify repository or start repository intelligence analysis.'
       );
     } finally {
       setActiveAction(null);

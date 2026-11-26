@@ -1,8 +1,11 @@
 import type {
   CollectedSourceFile,
+  IntelligenceFileStatus,
+  IntelligenceTreeNode,
   Repository,
   RepositoryCollectionLimits,
   RepositoryCollectionReport,
+  RepositoryIntelligenceCollectionBundle,
 } from '../types.ts';
 
 const GITHUB_API_BASE = 'https://api.github.com';
@@ -1611,3 +1614,540 @@ export async function collectRepositorySources(params: {
     collectedFiles,
   };
 }
+
+export function isSensitiveRepoPath(filePath: string): boolean {
+  const clean = filePath.replace(/^\/+/, '').toLowerCase();
+  const fileName = clean.split('/').pop() || '';
+  if (!fileName) return false;
+
+  // Allow template/example env files
+  if (
+    fileName === '.env.example' ||
+    fileName === '.env.sample' ||
+    fileName === '.env.template' ||
+    fileName.endsWith('.env.example') ||
+    fileName.endsWith('.env.sample') ||
+    fileName.endsWith('.env.template')
+  ) {
+    return false;
+  }
+
+  if (fileName === '.env' || fileName.startsWith('.env.')) {
+    return true;
+  }
+
+  if (
+    fileName.endsWith('.pem') ||
+    fileName.endsWith('.key') ||
+    fileName.endsWith('.p12') ||
+    fileName.endsWith('.pfx') ||
+    fileName.endsWith('.jks') ||
+    fileName.endsWith('.keystore')
+  ) {
+    return true;
+  }
+
+  if (
+    fileName === 'id_rsa' ||
+    fileName === 'id_dsa' ||
+    fileName === 'id_ecdsa' ||
+    fileName === 'id_ed25519' ||
+    fileName === '.npmrc' ||
+    fileName === '.pypirc' ||
+    fileName === '.netrc'
+  ) {
+    return true;
+  }
+
+  if (
+    (fileName.includes('service-account') ||
+      fileName.includes('service_account') ||
+      fileName.includes('serviceaccount') ||
+      fileName.includes('credentials')) &&
+    fileName.endsWith('.json')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function computeIntelligenceFilePriority(filePath: string): number {
+  const lower = filePath.toLowerCase();
+  const segments = lower.split('/');
+  const fileName = segments[segments.length - 1] || '';
+
+  // 1. Entry points, README, manifests, configs, schemas
+  if (
+    fileName.startsWith('readme') ||
+    fileName === 'package.json' ||
+    fileName === 'pyproject.toml' ||
+    fileName === 'requirements.txt' ||
+    fileName === 'go.mod' ||
+    fileName === 'cargo.toml' ||
+    fileName === 'pom.xml' ||
+    fileName === 'composer.json' ||
+    fileName === '.env.example' ||
+    fileName === 'docker-compose.yml' ||
+    fileName === 'docker-compose.yaml' ||
+    fileName === 'dockerfile' ||
+    fileName === 'firestore.rules' ||
+    fileName === 'firebase-blueprint.json' ||
+    fileName.startsWith('drizzle.config.') ||
+    fileName.startsWith('vite.config.') ||
+    fileName.startsWith('next.config.')
+  ) {
+    return 1;
+  }
+
+  // 2. Database schemas, models, auth, server/app entries
+  if (
+    fileName.includes('schema') ||
+    fileName.includes('model') ||
+    fileName.includes('auth') ||
+    fileName.includes('firebase') ||
+    fileName.includes('store') ||
+    fileName.includes('database') ||
+    fileName.includes('db.') ||
+    fileName.endsWith('.sql') ||
+    fileName.endsWith('.prisma') ||
+    (/^(server|app|main|index)\.[^.]+$/.test(fileName) && segments.length <= 3)
+  ) {
+    return 2;
+  }
+
+  // 3. API routes, controllers, services, middleware, frontend router/context/api clients
+  if (
+    segments.some((seg) =>
+      [
+        'routes',
+        'route',
+        'controllers',
+        'controller',
+        'services',
+        'service',
+        'api',
+        'middleware',
+        'middlewares',
+        'context',
+        'contexts',
+        'store',
+        'stores',
+        'hooks',
+        'pages',
+        'views',
+        'app',
+      ].includes(seg)
+    )
+  ) {
+    return 3;
+  }
+
+  // 4. General source code
+  if (!segments.some((s) => ['test', 'tests', '__tests__', 'spec', 'docs'].includes(s))) {
+    return 4;
+  }
+
+  // 5. Tests & extra docs
+  return 5;
+}
+
+export async function collectRepositoryIntelligenceBundle(params: {
+  fullName: string;
+  branch: string;
+  token?: string;
+  limits?: Partial<RepositoryCollectionLimits>;
+}): Promise<RepositoryIntelligenceCollectionBundle> {
+  const fullName = parseRepoFullName(params.fullName);
+  const branch = params.branch.trim();
+  const resolvedToken = params.token || process.env.GITHUB_TOKEN?.trim() || undefined;
+  const limits: RepositoryCollectionLimits = {
+    maxFiles: Math.min(120, Math.max(20, params.limits?.maxFiles ?? (resolvedToken ? 110 : 75))),
+    maxFileSizeBytes: params.limits?.maxFileSizeBytes ?? 90 * 1024,
+    maxTotalBytes: params.limits?.maxTotalBytes ?? 720 * 1024,
+    maxConcurrency: params.limits?.maxConcurrency ?? 6,
+  };
+
+  if (!isValidBranchName(branch)) {
+    throw new GitHubApiError('Invalid branch name.', 400);
+  }
+
+  const access = await verifyGitHubRepositoryAccess(fullName, resolvedToken);
+
+  interface RawCommitRef {
+    sha: string;
+    commit: {
+      tree?: { sha?: string };
+    };
+  }
+
+  const commitRes = await githubFetchWithMeta<RawCommitRef>(
+    `${GITHUB_API_BASE}/repos/${fullName}/commits/${encodeURIComponent(branch)}`,
+    resolvedToken
+  );
+
+  const analyzedCommitSha = commitRes.data.sha;
+  const treeSha = commitRes.data.commit?.tree?.sha || analyzedCommitSha;
+
+  interface RawGitTreeEntry {
+    path: string;
+    mode: string;
+    type: 'blob' | 'tree' | 'commit';
+    sha: string;
+    size?: number;
+  }
+
+  interface RawGitTreeResponse {
+    sha: string;
+    truncated: boolean;
+    tree: RawGitTreeEntry[];
+  }
+
+  const treeRes = await githubFetchWithMeta<RawGitTreeResponse>(
+    `${GITHUB_API_BASE}/repos/${fullName}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
+    resolvedToken
+  );
+
+  const rawEntries = Array.isArray(treeRes.data.tree) ? treeRes.data.tree : [];
+  const totalTreeEntries = rawEntries.length;
+  const treeTruncated = Boolean(treeRes.data.truncated);
+
+  const treeNodeMap = new Map<string, IntelligenceTreeNode>();
+  let totalDirectories = 0;
+  let totalFiles = 0;
+  let filesSkipped = 0;
+  let filesTruncated = 0;
+  let failedFiles = 0;
+
+  interface CandidateEntry {
+    path: string;
+    sha: string;
+    size: number;
+    language: string;
+    priority: number;
+    depth: number;
+  }
+
+  const eligibleCandidates: CandidateEntry[] = [];
+
+  for (const entry of rawEntries) {
+    if (!entry.path || entry.path.startsWith('.git/') || entry.path === '.git') continue;
+    const cleanPath = entry.path.replace(/^\/+/, '');
+    const name = cleanPath.split('/').pop() || cleanPath;
+
+    if (entry.type === 'tree') {
+      if (isIgnoredRepoPath(`${cleanPath}/placeholder`)) {
+        // Still allow top-level folder visibility except .git/node_modules internals
+        const segments = cleanPath.toLowerCase().split('/');
+        if (segments.some((s) => s === '.git' || s === 'node_modules')) continue;
+      }
+      totalDirectories += 1;
+      treeNodeMap.set(cleanPath, {
+        path: cleanPath,
+        name,
+        type: 'dir',
+        size: 0,
+        sha: entry.sha,
+        language: null,
+      });
+      continue;
+    }
+
+    if (entry.type !== 'blob') continue;
+    const segments = cleanPath.toLowerCase().split('/');
+    if (segments.some((s) => s === 'node_modules' || s === '.git')) {
+      totalFiles += 1;
+      filesSkipped += 1;
+      continue;
+    }
+
+    totalFiles += 1;
+    const sensitive = isSensitiveRepoPath(cleanPath);
+    const language = sensitive ? null : detectSourceLanguage(cleanPath);
+    const ext = getExtension(name);
+    const isKnownBinary = Boolean(ext && IGNORED_BINARY_EXTENSIONS.has(ext));
+
+    let initialStatus: IntelligenceFileStatus = 'uncollected';
+    if (sensitive) {
+      initialStatus = 'sensitive';
+      filesSkipped += 1;
+    } else if (isKnownBinary) {
+      initialStatus = 'binary';
+      filesSkipped += 1;
+    } else if (!language) {
+      initialStatus = 'skipped';
+      filesSkipped += 1;
+    }
+
+    treeNodeMap.set(cleanPath, {
+      path: cleanPath,
+      name,
+      type: 'file',
+      size: typeof entry.size === 'number' ? entry.size : 0,
+      sha: entry.sha,
+      language,
+      status: initialStatus,
+    });
+
+    if (language && !sensitive) {
+      eligibleCandidates.push({
+        path: cleanPath,
+        sha: entry.sha,
+        size: typeof entry.size === 'number' ? entry.size : 0,
+        language,
+        priority: computeIntelligenceFilePriority(cleanPath),
+        depth: cleanPath.split('/').length,
+      });
+    }
+  }
+
+  eligibleCandidates.sort(
+    (a, b) =>
+      a.priority - b.priority ||
+      a.depth - b.depth ||
+      a.path.localeCompare(b.path)
+  );
+
+  const eligibleFiles = eligibleCandidates.length;
+  const withinFileSizeCandidates: CandidateEntry[] = [];
+
+  for (const candidate of eligibleCandidates) {
+    if (candidate.size > limits.maxFileSizeBytes) {
+      filesSkipped += 1;
+      const node = treeNodeMap.get(candidate.path);
+      if (node) node.status = 'skipped';
+    } else {
+      withinFileSizeCandidates.push(candidate);
+    }
+  }
+
+  const candidatesToFetch = withinFileSizeCandidates.slice(0, limits.maxFiles);
+  for (const dropped of withinFileSizeCandidates.slice(limits.maxFiles)) {
+    filesSkipped += 1;
+    const node = treeNodeMap.get(dropped.path);
+    if (node) node.status = 'uncollected';
+  }
+
+  interface RawBlobResponse {
+    sha: string;
+    size?: number;
+    encoding?: string;
+    content?: string;
+  }
+
+  type FetchOutcome =
+    | { kind: 'ok'; candidate: CandidateEntry; rawText: string; originalSize: number }
+    | { kind: 'skip'; reason: 'binary' | 'size' }
+    | { kind: 'fail'; fatalError?: GitHubApiError };
+
+  async function fetchCandidateSource(candidate: CandidateEntry): Promise<FetchOutcome> {
+    // For public repositories without an OAuth/PAT token, prefer raw.githubusercontent.com
+    // so we preserve GitHub REST API rate limit (60 req/hr unauthenticated).
+    if (!access.isPrivate && !resolvedToken) {
+      try {
+        const encodedPath = candidate.path
+          .split('/')
+          .map((seg) => encodeURIComponent(seg))
+          .join('/');
+        const rawUrl = `https://raw.githubusercontent.com/${fullName}/${encodeURIComponent(
+          analyzedCommitSha
+        )}/${encodedPath}`;
+        const rawRes = await fetch(rawUrl, {
+          headers: { 'User-Agent': 'CodeRubric-AI-Reviewer' },
+        });
+        if (rawRes.ok) {
+          const buf = Buffer.from(await rawRes.arrayBuffer());
+          if (buf.length > limits.maxFileSizeBytes) {
+            return { kind: 'skip', reason: 'size' };
+          }
+          const sampleEnd = Math.min(buf.length, 4096);
+          for (let i = 0; i < sampleEnd; i += 1) {
+            if (buf[i] === 0) return { kind: 'skip', reason: 'binary' };
+          }
+          return {
+            kind: 'ok',
+            candidate,
+            rawText: buf.toString('utf-8'),
+            originalSize: candidate.size || buf.length,
+          };
+        }
+      } catch {
+        // Fall through to GitHub Blobs API fallback
+      }
+    }
+
+    try {
+      const { data: blob } = await githubFetchWithMeta<RawBlobResponse>(
+        `${GITHUB_API_BASE}/repos/${fullName}/git/blobs/${encodeURIComponent(candidate.sha)}`,
+        resolvedToken
+      );
+
+      if (blob.encoding !== 'base64' || typeof blob.content !== 'string') {
+        return { kind: 'skip', reason: 'binary' };
+      }
+
+      const buffer = Buffer.from(blob.content.replace(/\n/g, ''), 'base64');
+      const originalSize =
+        typeof blob.size === 'number' ? blob.size : candidate.size || buffer.length;
+      if (buffer.length > limits.maxFileSizeBytes || originalSize > limits.maxFileSizeBytes) {
+        return { kind: 'skip', reason: 'size' };
+      }
+
+      const sampleEnd = Math.min(buffer.length, 4096);
+      for (let i = 0; i < sampleEnd; i += 1) {
+        if (buffer[i] === 0) {
+          return { kind: 'skip', reason: 'binary' };
+        }
+      }
+
+      return {
+        kind: 'ok',
+        candidate,
+        rawText: buffer.toString('utf-8'),
+        originalSize,
+      };
+    } catch (err) {
+      if (err instanceof GitHubApiError && (err.isRateLimited || err.status === 401 || err.status === 403)) {
+        return { kind: 'fail', fatalError: err };
+      }
+      return { kind: 'fail' };
+    }
+  }
+
+  let totalBytesCollected = 0;
+  let budgetExhausted = false;
+  let fatalStopError: GitHubApiError | null = null;
+  const collectedFiles: CollectedSourceFile[] = [];
+  const rawContentByPath: Record<string, string> = {};
+
+  for (let i = 0; i < candidatesToFetch.length; i += limits.maxConcurrency) {
+    if (budgetExhausted || fatalStopError) {
+      for (const rem of candidatesToFetch.slice(i)) {
+        filesSkipped += 1;
+        const node = treeNodeMap.get(rem.path);
+        if (node) node.status = 'uncollected';
+      }
+      break;
+    }
+
+    const wave = candidatesToFetch.slice(i, i + limits.maxConcurrency);
+    const outcomes = await Promise.all(wave.map((c) => fetchCandidateSource(c)));
+
+    for (let j = 0; j < outcomes.length; j += 1) {
+      const outcome = outcomes[j];
+      const waveCandidate = wave[j];
+      if (outcome.kind === 'skip') {
+        filesSkipped += 1;
+        const node = treeNodeMap.get(waveCandidate.path);
+        if (node) node.status = outcome.reason === 'binary' ? 'binary' : 'skipped';
+        continue;
+      }
+      if (outcome.kind === 'fail') {
+        failedFiles += 1;
+        const node = treeNodeMap.get(waveCandidate.path);
+        if (node) node.status = 'failed';
+        if (outcome.fatalError) {
+          fatalStopError = outcome.fatalError;
+        }
+        continue;
+      }
+
+      if (budgetExhausted) {
+        filesSkipped += 1;
+        const node = treeNodeMap.get(outcome.candidate.path);
+        if (node) node.status = 'uncollected';
+        continue;
+      }
+
+      const { formatted, lineCount } = formatLineNumberedSource(
+        outcome.candidate.path,
+        outcome.rawText
+      );
+      const formattedBytes = Buffer.byteLength(formatted, 'utf-8');
+
+      if (totalBytesCollected + formattedBytes <= limits.maxTotalBytes) {
+        collectedFiles.push({
+          path: outcome.candidate.path,
+          blobSha: outcome.candidate.sha,
+          language: outcome.candidate.language,
+          originalSize: outcome.originalSize,
+          collectedSize: formattedBytes,
+          lineCount,
+          content: formatted,
+          truncated: false,
+        });
+        rawContentByPath[outcome.candidate.path] = outcome.rawText;
+        totalBytesCollected += formattedBytes;
+        const node = treeNodeMap.get(outcome.candidate.path);
+        if (node) node.status = 'analyzed';
+      } else if (collectedFiles.length === 0) {
+        const sliced = truncateLineNumberedToByteLimit(
+          outcome.candidate.path,
+          outcome.rawText,
+          limits.maxTotalBytes
+        );
+        const slicedBytes = Buffer.byteLength(sliced.formatted, 'utf-8');
+        collectedFiles.push({
+          path: outcome.candidate.path,
+          blobSha: outcome.candidate.sha,
+          language: outcome.candidate.language,
+          originalSize: outcome.originalSize,
+          collectedSize: slicedBytes,
+          lineCount: sliced.lineCount,
+          content: sliced.formatted,
+          truncated: true,
+        });
+        rawContentByPath[outcome.candidate.path] = outcome.rawText.slice(0, 60000);
+        totalBytesCollected += slicedBytes;
+        filesTruncated += 1;
+        budgetExhausted = true;
+        const node = treeNodeMap.get(outcome.candidate.path);
+        if (node) node.status = 'truncated';
+      } else {
+        filesSkipped += 1;
+        budgetExhausted = true;
+        const node = treeNodeMap.get(outcome.candidate.path);
+        if (node) node.status = 'uncollected';
+      }
+    }
+
+    if (fatalStopError && collectedFiles.length === 0) {
+      throw fatalStopError;
+    }
+  }
+
+  const treeNodes = Array.from(treeNodeMap.values()).sort((a, b) => {
+    if (a.type === 'dir' && b.type !== 'dir') return -1;
+    if (a.type !== 'dir' && b.type === 'dir') return 1;
+    return a.path.localeCompare(b.path);
+  });
+
+  const filesCollected = collectedFiles.length;
+  const coverageComplete =
+    !treeTruncated &&
+    filesSkipped === 0 &&
+    filesTruncated === 0 &&
+    failedFiles === 0 &&
+    filesCollected === eligibleFiles;
+
+  return {
+    repositoryFullName: fullName,
+    branch,
+    analyzedCommitSha,
+    totalTreeEntries,
+    totalDirectories,
+    totalFiles,
+    eligibleFiles,
+    filesCollected,
+    filesSkipped,
+    filesTruncated,
+    failedFiles,
+    totalBytesCollected,
+    treeTruncated,
+    coverageComplete,
+    treeNodes,
+    collectedFiles,
+    rawContentByPath,
+  };
+}
+

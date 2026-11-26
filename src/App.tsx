@@ -18,6 +18,7 @@ import type {
   NavSection,
   Repository,
   RepositoryAnalysisJob,
+  RepositoryIntelligenceJob,
   ReviewStatus,
   Severity,
   WorkspaceSettings,
@@ -192,6 +193,64 @@ export default function App() {
           }
           return Array.from(merged.values());
         });
+
+        // Restore last viewed Repository Intelligence report if page reloaded on #repository-intelligence
+        const savedRepoId = window.localStorage.getItem('coderubric.lastIntelRepoId');
+        const candidateRepo =
+          readableRepos.find((r) => r.id === savedRepoId) ?? readableRepos[0];
+        if (candidateRepo) {
+          api
+            .getLatestRepositoryIntelligence(candidateRepo.id)
+            .then(({ report }) => {
+              const synthJob: RepositoryIntelligenceJob = {
+                id: `intel-restored-${report.id}`,
+                repositoryId: candidateRepo.id,
+                repositoryFullName: report.repositoryFullName,
+                branch: report.branch,
+                status: report.analysisStatus === 'partial' ? 'partial' : 'completed',
+                progress: 100,
+                currentStep: report.analysisStatus === 'partial' ? 'partial' : 'completed',
+                message: `Loaded persisted Repository Intelligence report for ${report.repositoryFullName}.`,
+                createdAt: report.generatedAt,
+                startedAt: report.generatedAt,
+                updatedAt: report.generatedAt,
+                completedAt: report.generatedAt,
+                analyzedCommitSha: report.analyzedCommitSha,
+                totalTreeEntries: report.coverage.totalTreeEntries,
+                totalFiles: report.coverage.totalFiles,
+                eligibleFiles: report.coverage.eligibleFiles,
+                filesCollected: report.coverage.analyzedFiles,
+                filesAnalyzed: report.coverage.analyzedFiles,
+                filesSkipped: report.coverage.skippedFiles,
+                failedFiles: report.coverage.failedFiles,
+                truncatedFiles: report.coverage.truncatedFiles,
+                totalChunks: report.coverage.totalChunksAnalyzed,
+                completedChunks: report.coverage.totalChunksAnalyzed,
+                reportId: report.id,
+                fromCache: true,
+                error: null,
+              };
+              setIntelligenceTarget((prev) =>
+                prev
+                  ? prev
+                  : {
+                      repository: candidateRepo,
+                      parsed: {
+                        ok: true,
+                        owner: candidateRepo.owner,
+                        repo: candidateRepo.name,
+                        fullName: candidateRepo.fullName,
+                        normalizedUrl: candidateRepo.htmlUrl,
+                      },
+                      job: synthJob,
+                      report,
+                    }
+              );
+            })
+            .catch(() => {
+              // No persisted intelligence report yet
+            });
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load CodeRubric workspace.');
@@ -506,9 +565,8 @@ export default function App() {
                   void syncRepository(repo);
                 }}
                 onStartRepositoryIntelligence={(target) => {
+                  window.localStorage.setItem('coderubric.lastIntelRepoId', target.repository.id);
                   setIntelligenceTarget(target);
-                  handleJobUpdated(target.job);
-                  void syncAnalysisJob(target.job);
                   navigateTo('repository-intelligence');
                 }}
                 onOpenPullRequestReview={(target) => {
@@ -521,13 +579,25 @@ export default function App() {
             {activeSection === 'repository-intelligence' && (
               <RepositoryIntelligenceView
                 target={intelligenceTarget}
-                agents={agents}
                 onBackToAnalyze={() => navigateTo('analyze')}
                 onJobUpdated={(updatedJob) => {
-                  handleJobUpdated(updatedJob);
-                  void syncAnalysisJob(updatedJob);
+                  setIntelligenceTarget((prev) =>
+                    prev && prev.repository.id === updatedJob.repositoryId
+                      ? { ...prev, job: updatedJob }
+                      : prev
+                  );
                 }}
-                onOpenReview={(reviewId) => void handleOpenReviewById(reviewId)}
+                onRunCodeReview={(repoSlug) => {
+                  const matched = repositories.find(
+                    (r) => r.fullName.toLowerCase() === repoSlug.toLowerCase()
+                  );
+                  if (matched) {
+                    setAutoOpenAnalyzeRepoId(matched.id);
+                    navigateTo('repositories');
+                  } else {
+                    handleOpenRunReview({ repoSlug, mode: 'github-pr' });
+                  }
+                }}
               />
             )}
 

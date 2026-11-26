@@ -1,3 +1,4 @@
+import { auth } from '../firebase';
 import type {
   AIAgent,
   CodeReview,
@@ -13,6 +14,9 @@ import type {
   GitHubUserRepoSummary,
   Repository,
   RepositoryAnalysisJob,
+  RepositoryChatMessage,
+  RepositoryIntelligenceJob,
+  RepositoryIntelligenceReport,
   ReviewStatus,
   WorkspaceSettings,
 } from '../types';
@@ -35,14 +39,27 @@ export class ApiError extends Error {
   }
 }
 
+async function resolveFirebaseAuthHeader(): Promise<Record<string, string>> {
+  const currentUser = auth?.currentUser;
+  if (!currentUser) return {};
+  try {
+    const idToken = await currentUser.getIdToken();
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const firebaseAuthHeader = await resolveFirebaseAuthHeader();
   const response = await fetch(url, {
     credentials: 'include',
+    ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...firebaseAuthHeader,
       ...(init?.headers ?? {}),
     },
-    ...init,
   });
 
   const data = (await response.json().catch(() => ({}))) as {
@@ -183,6 +200,78 @@ export const api = {
   getRepositoryAnalysisJobs: (repoId: string) =>
     requestJson<{ isDemo: boolean; jobs: RepositoryAnalysisJob[] }>(
       `/api/repositories/${repoId}/analysis-jobs`
+    ),
+
+  startRepositoryIntelligence: (repoId: string, branch?: string, forceRefresh = false) =>
+    requestJson<{ job: RepositoryIntelligenceJob }>(
+      `/api/repositories/${repoId}/intelligence`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(branch ? { branch } : {}),
+          ...(forceRefresh ? { forceRefresh: true } : {}),
+        }),
+      }
+    ),
+
+  getIntelligenceJob: (jobId: string) =>
+    requestJson<{ job: RepositoryIntelligenceJob }>(`/api/intelligence-jobs/${jobId}`),
+
+  getIntelligenceReport: (reportId: string) =>
+    requestJson<{ report: RepositoryIntelligenceReport }>(
+      `/api/intelligence-reports/${reportId}`
+    ),
+
+  getLatestRepositoryIntelligence: (repoId: string) =>
+    requestJson<{ report: RepositoryIntelligenceReport }>(
+      `/api/repositories/${repoId}/intelligence`
+    ),
+
+  getIntelligenceFile: (repoId: string, filePath: string, ref?: string) => {
+    const qs = new URLSearchParams({ path: filePath });
+    if (ref) qs.set('ref', ref);
+    return requestJson<{
+      source: 'cache' | 'github-live';
+      file: {
+        name: string;
+        path: string;
+        size: number;
+        lineCount: number;
+        content: string;
+        isBinary: boolean;
+        truncated: boolean;
+        language: string;
+        purpose: string;
+        layer: string;
+        symbols: string[];
+        relatedComponentIds: string[];
+        htmlUrl: string;
+      };
+    }>(`/api/repositories/${repoId}/intelligence/file?${qs.toString()}`);
+  },
+
+  getIntelligenceQaHistory: (repoId: string) =>
+    requestJson<{
+      hasReport: boolean;
+      repositoryId: string;
+      userId: string;
+      messages: RepositoryChatMessage[];
+    }>(`/api/repositories/${repoId}/intelligence/qa`),
+
+  askRepositoryQuestion: (repoId: string, question: string) =>
+    requestJson<{
+      message: RepositoryChatMessage;
+      messages: RepositoryChatMessage[];
+      retrievedFileCount: number;
+    }>(`/api/repositories/${repoId}/intelligence/qa`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+
+  clearIntelligenceQaHistory: (repoId: string) =>
+    requestJson<{ ok: boolean; repositoryId: string }>(
+      `/api/repositories/${repoId}/intelligence/qa`,
+      { method: 'DELETE' }
     ),
 
   runReview: (payload: {

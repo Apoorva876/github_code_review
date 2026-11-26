@@ -592,5 +592,7 @@
     "storageMode": "local-json",
     "persistenceNote": "Cloud Firestore (database: ai-studio-coderubric-a62b149b-c49c-4d79-a80e-bdb404ef4d9d) with local JSON server persistence (data/coderubric-store.json). Sign in with Google in Settings or the top bar to sync workspace data across sessions."
   },
-  "analysisJobs": []
+  "analysisJobs": [],
+  "intelligenceJobs": [],
+  "intelligenceReports": []
 }

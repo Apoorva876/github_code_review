@@ -47,7 +47,7 @@ export class GeminiServiceError extends Error {
   }
 }
 
-const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
+export const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
 const PROHIBITED_MODELS = new Set([
   'gemini-1.5-flash',
   'gemini-1.5-pro',

@@ -6,6 +6,9 @@ import type {
   CodeReview,
   Repository,
   RepositoryAnalysisJob,
+  RepositoryChatMessage,
+  RepositoryIntelligenceJob,
+  RepositoryIntelligenceReport,
   ReviewStatus,
   StoreState,
   WorkspaceSettings,
@@ -14,6 +17,10 @@ import type {
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'coderubric-store.json');
 const MAX_ANALYSIS_JOBS = 100;
+const MAX_INTELLIGENCE_JOBS = 50;
+const MAX_INTELLIGENCE_REPORTS = 20;
+const MAX_CHAT_MESSAGES_PER_THREAD = 60;
+const MAX_CHAT_THREADS = 100;
 
 let memoryState: StoreState | null = null;
 
@@ -73,6 +80,31 @@ export function migrateStoreState(state: StoreState): { state: StoreState; migra
   ) {
     state.settings.persistenceNote =
       'Cloud Firestore (database: ai-studio-coderubric-a62b149b-c49c-4d79-a80e-bdb404ef4d9d) with local JSON server persistence (data/coderubric-store.json). Sign in with Google in Settings or the top bar to sync workspace data across sessions.';
+    migrated = true;
+  }
+
+  if (!Array.isArray(state.intelligenceJobs)) {
+    state.intelligenceJobs = [];
+    migrated = true;
+  } else if (state.intelligenceJobs.length > MAX_INTELLIGENCE_JOBS) {
+    state.intelligenceJobs = state.intelligenceJobs.slice(0, MAX_INTELLIGENCE_JOBS);
+    migrated = true;
+  }
+
+  if (!Array.isArray(state.intelligenceReports)) {
+    state.intelligenceReports = [];
+    migrated = true;
+  } else if (state.intelligenceReports.length > MAX_INTELLIGENCE_REPORTS) {
+    state.intelligenceReports = state.intelligenceReports.slice(0, MAX_INTELLIGENCE_REPORTS);
+    migrated = true;
+  }
+
+  if (
+    !state.intelligenceChats ||
+    typeof state.intelligenceChats !== 'object' ||
+    Array.isArray(state.intelligenceChats)
+  ) {
+    state.intelligenceChats = {};
     migrated = true;
   }
 
@@ -199,6 +231,9 @@ export function hydrateWorkspaceStore(input: {
       githubTokenConfigured: current.settings.githubTokenConfigured,
       githubTokenMask: current.settings.githubTokenMask,
     },
+    intelligenceJobs: current.intelligenceJobs ?? [],
+    intelligenceReports: current.intelligenceReports ?? [],
+    intelligenceChats: current.intelligenceChats ?? {},
     ...(current.githubToken ? { githubToken: current.githubToken } : {}),
   };
 
@@ -487,3 +522,227 @@ export function recoverInterruptedAnalysisJobs(nowIso?: string): number {
   }
   return recovered;
 }
+
+const ACTIVE_INTELLIGENCE_STATUSES = new Set([
+  'queued',
+  'retrieving_tree',
+  'collecting_files',
+  'analyzing_chunks',
+  'synthesizing_architecture',
+]);
+
+export function createIntelligenceJob(job: RepositoryIntelligenceJob): RepositoryIntelligenceJob {
+  const state = getStore();
+  if (!Array.isArray(state.intelligenceJobs)) {
+    state.intelligenceJobs = [];
+  }
+  const existing = state.intelligenceJobs.find((j) => j.id === job.id);
+  if (existing) return existing;
+  state.intelligenceJobs.unshift(job);
+  if (state.intelligenceJobs.length > MAX_INTELLIGENCE_JOBS) {
+    state.intelligenceJobs.length = MAX_INTELLIGENCE_JOBS;
+  }
+  saveStore(state);
+  return job;
+}
+
+export function updateIntelligenceJob(
+  jobId: string,
+  patch: Partial<RepositoryIntelligenceJob>
+): RepositoryIntelligenceJob | null {
+  const state = getStore();
+  if (!Array.isArray(state.intelligenceJobs)) {
+    state.intelligenceJobs = [];
+  }
+  const idx = state.intelligenceJobs.findIndex((j) => j.id === jobId);
+  if (idx === -1) return null;
+
+  const current = state.intelligenceJobs[idx];
+  const nextProgress =
+    typeof patch.progress === 'number' && Number.isFinite(patch.progress)
+      ? Math.max(current.progress, Math.min(100, Math.round(patch.progress)))
+      : current.progress;
+
+  const updated: RepositoryIntelligenceJob = {
+    ...current,
+    ...patch,
+    id: current.id,
+    progress: nextProgress,
+    updatedAt: patch.updatedAt || new Date().toISOString(),
+  };
+  state.intelligenceJobs[idx] = updated;
+  saveStore(state);
+  return updated;
+}
+
+export function getIntelligenceJobById(jobId: string): RepositoryIntelligenceJob | null {
+  const state = getStore();
+  const list = Array.isArray(state.intelligenceJobs) ? state.intelligenceJobs : [];
+  return list.find((j) => j.id === jobId) ?? null;
+}
+
+export function saveIntelligenceReport(
+  report: RepositoryIntelligenceReport
+): RepositoryIntelligenceReport {
+  const state = getStore();
+  if (!Array.isArray(state.intelligenceReports)) {
+    state.intelligenceReports = [];
+  }
+  // Replace existing report for same repo + commit SHA or id to avoid bloat
+  state.intelligenceReports = state.intelligenceReports.filter(
+    (r) =>
+      r.id !== report.id &&
+      !(
+        r.repositoryFullName.toLowerCase() === report.repositoryFullName.toLowerCase() &&
+        r.analyzedCommitSha === report.analyzedCommitSha &&
+        r.branch === report.branch
+      )
+  );
+  state.intelligenceReports.unshift(report);
+  if (state.intelligenceReports.length > MAX_INTELLIGENCE_REPORTS) {
+    state.intelligenceReports.length = MAX_INTELLIGENCE_REPORTS;
+  }
+  saveStore(state);
+  return report;
+}
+
+export function getIntelligenceReportById(reportId: string): RepositoryIntelligenceReport | null {
+  const state = getStore();
+  const list = Array.isArray(state.intelligenceReports) ? state.intelligenceReports : [];
+  return list.find((r) => r.id === reportId) ?? null;
+}
+
+export function getLatestIntelligenceReportForRepository(
+  repositoryId: string,
+  repositoryFullName?: string
+): RepositoryIntelligenceReport | null {
+  const state = getStore();
+  const list = Array.isArray(state.intelligenceReports) ? state.intelligenceReports : [];
+  const lowerFull = repositoryFullName?.toLowerCase();
+  const matches = list.filter(
+    (r) =>
+      r.repositoryId === repositoryId ||
+      (lowerFull ? r.repositoryFullName.toLowerCase() === lowerFull : false)
+  );
+  if (matches.length === 0) return null;
+  return matches.sort(
+    (a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime()
+  )[0];
+}
+
+export function findCachedIntelligenceReport(
+  repositoryFullName: string,
+  branch: string,
+  commitSha?: string
+): RepositoryIntelligenceReport | null {
+  const state = getStore();
+  const list = Array.isArray(state.intelligenceReports) ? state.intelligenceReports : [];
+  const lower = repositoryFullName.toLowerCase();
+  return (
+    list.find(
+      (r) =>
+        r.repositoryFullName.toLowerCase() === lower &&
+        r.branch === branch &&
+        (commitSha ? r.analyzedCommitSha === commitSha : true)
+    ) ?? null
+  );
+}
+
+export function recoverInterruptedIntelligenceJobs(nowIso?: string): number {
+  const state = getStore();
+  if (!Array.isArray(state.intelligenceJobs)) {
+    state.intelligenceJobs = [];
+    return 0;
+  }
+  const timestamp = nowIso || new Date().toISOString();
+  let recovered = 0;
+
+  state.intelligenceJobs = state.intelligenceJobs.map((job) => {
+    if (!ACTIVE_INTELLIGENCE_STATUSES.has(job.status)) {
+      return job;
+    }
+    recovered += 1;
+    return {
+      ...job,
+      status: 'failed',
+      currentStep: 'interrupted',
+      message: 'Repository intelligence analysis was interrupted by a server restart.',
+      error: 'Server restarted while generating repository intelligence. Please retry.',
+      updatedAt: timestamp,
+      completedAt: timestamp,
+    };
+  });
+
+  if (recovered > 0) {
+    saveStore(state);
+  }
+  return recovered;
+}
+
+export function buildIntelligenceChatKey(userId: string, repositoryId: string): string {
+  const safeUser = userId.trim();
+  const safeRepo = repositoryId.trim();
+  return `${safeUser}::${safeRepo}`;
+}
+
+export function getIntelligenceChatHistory(
+  userId: string,
+  repositoryId: string
+): RepositoryChatMessage[] {
+  const state = getStore();
+  const map = state.intelligenceChats ?? {};
+  const key = buildIntelligenceChatKey(userId, repositoryId);
+  const thread = map[key];
+  if (!Array.isArray(thread)) return [];
+  // Double-check strict userId & repositoryId isolation
+  return thread.filter((m) => m.userId === userId.trim() && m.repositoryId === repositoryId.trim());
+}
+
+export function appendIntelligenceChatMessages(
+  userId: string,
+  repositoryId: string,
+  messages: RepositoryChatMessage[]
+): RepositoryChatMessage[] {
+  const state = getStore();
+  if (!state.intelligenceChats || typeof state.intelligenceChats !== 'object') {
+    state.intelligenceChats = {};
+  }
+  const key = buildIntelligenceChatKey(userId, repositoryId);
+  const existing = getIntelligenceChatHistory(userId, repositoryId);
+  const nextThread = [
+    ...existing,
+    ...messages.filter(
+      (m) => m.userId === userId.trim() && m.repositoryId === repositoryId.trim()
+    ),
+  ].slice(-MAX_CHAT_MESSAGES_PER_THREAD);
+
+  state.intelligenceChats[key] = nextThread;
+
+  const keys = Object.keys(state.intelligenceChats);
+  if (keys.length > MAX_CHAT_THREADS) {
+    const sorted = keys.sort((a, b) => {
+      const aTime = state.intelligenceChats?.[a]?.slice(-1)[0]?.createdAt ?? '';
+      const bTime = state.intelligenceChats?.[b]?.slice(-1)[0]?.createdAt ?? '';
+      return bTime.localeCompare(aTime);
+    });
+    for (const staleKey of sorted.slice(MAX_CHAT_THREADS)) {
+      delete state.intelligenceChats[staleKey];
+    }
+  }
+
+  saveStore(state);
+  return nextThread;
+}
+
+export function clearIntelligenceChatHistory(userId: string, repositoryId: string): void {
+  const state = getStore();
+  if (!state.intelligenceChats || typeof state.intelligenceChats !== 'object') {
+    return;
+  }
+  const key = buildIntelligenceChatKey(userId, repositoryId);
+  if (key in state.intelligenceChats) {
+    delete state.intelligenceChats[key];
+    saveStore(state);
+  }
+}
+
