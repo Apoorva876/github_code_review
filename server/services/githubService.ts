@@ -281,13 +281,45 @@ async function githubFetchWithMeta<T>(
 
 export function parseRepoFullName(input: string): string {
   const trimmed = input.trim();
-  const urlMatch = trimmed.match(/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/i);
-  if (urlMatch) {
-    return urlMatch[1].replace(/\.git$/, '');
+  if (/^https?:\/\//i.test(trimmed) || /^(?:www\.)?github\.com\//i.test(trimmed)) {
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new GitHubApiError(
+        'Enter a valid GitHub repository URL (e.g. https://github.com/owner/repository).',
+        400
+      );
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'github.com' && host !== 'www.github.com') {
+      throw new GitHubApiError(
+        'Only github.com repository URLs are supported (e.g. https://github.com/owner/repository).',
+        400
+      );
+    }
+    const segments = parsed.pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+    if (segments.length >= 2) {
+      const owner = segments[0];
+      const repo = segments[1].replace(/\.git$/i, '');
+      if (
+        /^[a-zA-Z0-9_.-]+$/.test(owner) &&
+        /^[a-zA-Z0-9_.-]+$/.test(repo) &&
+        repo !== '.' &&
+        repo !== '..'
+      ) {
+        return `${owner}/${repo}`;
+      }
+    }
+    throw new GitHubApiError(
+      'Enter a valid GitHub repository URL (e.g. https://github.com/owner/repository).',
+      400
+    );
   }
   const slugMatch = trimmed.match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)$/);
   if (slugMatch) {
-    return slugMatch[1];
+    return slugMatch[1].replace(/\.git$/i, '');
   }
   throw new GitHubApiError(
     'Enter a valid GitHub repository slug (e.g. expressjs/express) or GitHub URL.',

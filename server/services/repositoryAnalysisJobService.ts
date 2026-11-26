@@ -30,7 +30,7 @@ export type SourceCollectorFn = typeof collectRepositorySources;
 export interface StartRepositoryAnalysisJobParams {
   repository: Repository;
   branch: string;
-  token: string;
+  token?: string;
   requestedByUserId?: number | null;
   requestedByLogin?: string | null;
   collectorFn?: SourceCollectorFn;
@@ -61,9 +61,11 @@ export function clearRepositoryAccessCache(): void {
 
 export async function verifyRepositoryAccessCached(
   fullName: string,
-  token: string
+  token?: string
 ): Promise<RepoAccessInfo> {
-  const tokenDigest = crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+  const tokenDigest = token
+    ? crypto.createHash('sha256').update(token).digest('hex').slice(0, 16)
+    : 'public';
   const key = `${tokenDigest}:${fullName.toLowerCase()}`;
   const now = Date.now();
   const cached = accessCache.get(key);
@@ -85,7 +87,7 @@ export async function verifyRepositoryAccessCached(
 export async function canCallerAccessAnalysisJob(params: {
   job: RepositoryAnalysisJob;
   session: GitHubOAuthSession | null;
-  token: string;
+  token?: string;
   skipRemoteCheck?: boolean;
 }): Promise<boolean> {
   const { job, session, token } = params;
@@ -102,6 +104,9 @@ export async function canCallerAccessAnalysisJob(params: {
 
   try {
     const access = await verifyRepositoryAccessCached(job.repositoryFullName, token);
+    if (access.isPrivate && !token) {
+      return false;
+    }
     if (access.isPrivate && session && !session.scopes.includes('repo')) {
       return false;
     }

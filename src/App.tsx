@@ -23,16 +23,26 @@ import type {
   WorkspaceSettings,
 } from './types';
 import { AgentsView } from './views/AgentsView';
+import {
+  AnalyzeView,
+  type PullRequestReviewTarget,
+  type RepositoryIntelligenceTarget,
+} from './views/AnalyzeView';
 import { AnalyticsView } from './views/AnalyticsView';
 import { CodeReviewsView } from './views/CodeReviewsView';
 import { DashboardView } from './views/DashboardView';
 import { HistoryView } from './views/HistoryView';
 import { LoginView } from './views/LoginView';
+import { PullRequestReviewView } from './views/PullRequestReviewView';
 import { RepositoriesView } from './views/RepositoriesView';
+import { RepositoryIntelligenceView } from './views/RepositoryIntelligenceView';
 import { SettingsView } from './views/SettingsView';
 
 const VALID_SECTIONS: ReadonlySet<NavSection> = new Set([
   'dashboard',
+  'analyze',
+  'repository-intelligence',
+  'pr-review',
   'repositories',
   'reviews',
   'agents',
@@ -55,6 +65,7 @@ export default function App() {
     clearSyncError,
     signOutFirebase,
     syncRepository,
+    syncAnalysisJob,
     syncReviewAndRelated,
     syncReviewMutation,
   } = useFirebase();
@@ -89,6 +100,9 @@ export default function App() {
 
   const [focusedRepoId, setFocusedRepoId] = useState<string | null>(null);
   const [autoOpenAnalyzeRepoId, setAutoOpenAnalyzeRepoId] = useState<string | null>(null);
+  const [intelligenceTarget, setIntelligenceTarget] =
+    useState<RepositoryIntelligenceTarget | null>(null);
+  const [prReviewTarget, setPrReviewTarget] = useState<PullRequestReviewTarget | null>(null);
   const [selectedReview, setSelectedReview] = useState<CodeReview | null>(null);
   const [reviewFilterPreset, setReviewFilterPreset] = useState<{
     status: 'all' | ReviewStatus;
@@ -156,10 +170,12 @@ export default function App() {
 
       const canReadLiveJobs =
         authRes.authenticated || Boolean(settingsRes.settings.githubTokenConfigured);
-      const liveRepos = reposRes.repositories.filter((r) => !r.isDemo);
-      if (canReadLiveJobs && liveRepos.length > 0) {
+      const readableRepos = reposRes.repositories.filter(
+        (r) => !r.isDemo && (canReadLiveJobs || !r.isPrivate)
+      );
+      if (readableRepos.length > 0) {
         const jobLists = await Promise.all(
-          liveRepos.map((repo) =>
+          readableRepos.map((repo) =>
             api
               .getRepositoryAnalysisJobs(repo.id)
               .then((res) => res.jobs)
@@ -196,6 +212,8 @@ export default function App() {
       setSelectedReview(null);
       setFocusedRepoId(null);
       setAutoOpenAnalyzeRepoId(null);
+      setIntelligenceTarget(null);
+      setPrReviewTarget(null);
       setCommandPaletteOpen(false);
       setConnectRepoOpen(false);
       setRunReviewOpen(false);
@@ -468,6 +486,58 @@ export default function App() {
                 }}
                 onOpenConnectRepo={() => setConnectRepoOpen(true)}
                 onRunReview={(agentId) => handleOpenRunReview(agentId ? { agentId } : undefined)}
+              />
+            )}
+
+            {activeSection === 'analyze' && (
+              <AnalyzeView
+                initialUrl={intelligenceTarget?.parsed.normalizedUrl || prReviewTarget?.parsed.normalizedUrl || ''}
+                onRepositoryVerified={(repo) => {
+                  setRepositories((prev) => {
+                    const exists = prev.some(
+                      (r) => r.fullName.toLowerCase() === repo.fullName.toLowerCase()
+                    );
+                    return exists
+                      ? prev.map((r) =>
+                          r.fullName.toLowerCase() === repo.fullName.toLowerCase() ? repo : r
+                        )
+                      : [repo, ...prev];
+                  });
+                  void syncRepository(repo);
+                }}
+                onStartRepositoryIntelligence={(target) => {
+                  setIntelligenceTarget(target);
+                  handleJobUpdated(target.job);
+                  void syncAnalysisJob(target.job);
+                  navigateTo('repository-intelligence');
+                }}
+                onOpenPullRequestReview={(target) => {
+                  setPrReviewTarget(target);
+                  navigateTo('pr-review');
+                }}
+              />
+            )}
+
+            {activeSection === 'repository-intelligence' && (
+              <RepositoryIntelligenceView
+                target={intelligenceTarget}
+                agents={agents}
+                onBackToAnalyze={() => navigateTo('analyze')}
+                onJobUpdated={(updatedJob) => {
+                  handleJobUpdated(updatedJob);
+                  void syncAnalysisJob(updatedJob);
+                }}
+                onOpenReview={(reviewId) => void handleOpenReviewById(reviewId)}
+              />
+            )}
+
+            {activeSection === 'pr-review' && (
+              <PullRequestReviewView
+                target={prReviewTarget}
+                onBackToAnalyze={() => navigateTo('analyze')}
+                onTriggerPrReview={(slug, prNum) =>
+                  handleOpenRunReview({ repoSlug: slug, prNumber: prNum, mode: 'github-pr' })
+                }
               />
             )}
 

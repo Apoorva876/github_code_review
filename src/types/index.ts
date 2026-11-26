@@ -1,5 +1,8 @@
 export type NavSection =
   | 'dashboard'
+  | 'analyze'
+  | 'repository-intelligence'
+  | 'pr-review'
   | 'repositories'
   | 'reviews'
   | 'agents'

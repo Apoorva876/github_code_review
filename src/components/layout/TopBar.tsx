@@ -22,6 +22,9 @@ interface TopBarProps {
 
 const SECTION_TITLES: Record<NavSection, string> = {
   dashboard: 'Dashboard',
+  analyze: 'Analyze',
+  'repository-intelligence': 'Repository Intelligence',
+  'pr-review': 'Pull Request Review',
   repositories: 'Repositories',
   reviews: 'Code Reviews',
   agents: 'AI Agents',

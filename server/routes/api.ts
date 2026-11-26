@@ -437,12 +437,6 @@ apiRouter.post('/repositories/:id/collect', async (req, res) => {
 apiRouter.post('/repositories/:id/analyze', async (req, res) => {
   const session = getSessionFromRequest(req);
   const token = resolveGitHubToken(req);
-  if (!token) {
-    return res.status(401).json({
-      error:
-        'GitHub authentication required to analyze repository source files. Sign in with GitHub OAuth or configure a server GitHub token.',
-    });
-  }
 
   const state = getStore();
   const repo = state.repositories.find((r) => r.id === req.params.id);
@@ -455,6 +449,13 @@ apiRouter.post('/repositories/:id/analyze', async (req, res) => {
       error:
         'Demo repositories do not have live source trees. Connect a real GitHub repository to run a multi-agent analysis.',
       isDemo: true,
+    });
+  }
+
+  if (repo.isPrivate && !token) {
+    return res.status(401).json({
+      error:
+        'GitHub authentication required to analyze private repository source files. Sign in with GitHub OAuth or configure a server GitHub token.',
     });
   }
 
@@ -510,6 +511,12 @@ apiRouter.post('/repositories/:id/analyze', async (req, res) => {
 
   try {
     const access = await verifyAccess(repo.fullName, token);
+    if (access.isPrivate && !token) {
+      return res.status(401).json({
+        error:
+          'GitHub authentication required to analyze private repository source files. Sign in with GitHub OAuth or configure a server GitHub token.',
+      });
+    }
     if (
       access.isPrivate &&
       session &&
@@ -545,15 +552,18 @@ apiRouter.post('/repositories/:id/analyze', async (req, res) => {
 apiRouter.get('/analysis-jobs/:jobId', async (req, res) => {
   const session = getSessionFromRequest(req);
   const token = resolveGitHubToken(req);
-  if (!token) {
-    return res.status(401).json({
-      error: 'GitHub authentication required to view analysis job status.',
-    });
-  }
 
   const job = getAnalysisJobById(req.params.jobId);
   if (!job) {
     return res.status(404).json({ error: 'Analysis job not found.' });
+  }
+
+  const state = getStore();
+  const repo = state.repositories.find((r) => r.id === job.repositoryId);
+  if (repo?.isPrivate && !token) {
+    return res.status(401).json({
+      error: 'GitHub authentication required to view private repository analysis job status.',
+    });
   }
 
   // Verify user ownership / repository access; return 404 to avoid leaking existence
@@ -566,11 +576,13 @@ apiRouter.get('/analysis-jobs/:jobId', async (req, res) => {
   if (allowed) {
     try {
       const access = await verifyAccess(job.repositoryFullName, token);
-      if (
+      if (access.isPrivate && !token) {
+        allowed = false;
+      } else if (
         access.isPrivate &&
         session &&
         !session.scopes.includes('repo') &&
-        !getStore().githubToken &&
+        !state.githubToken &&
         !process.env.GITHUB_TOKEN
       ) {
         allowed = false;
@@ -592,11 +604,6 @@ apiRouter.get('/analysis-jobs/:jobId', async (req, res) => {
 apiRouter.get('/repositories/:id/analysis-jobs', async (req, res) => {
   const session = getSessionFromRequest(req);
   const token = resolveGitHubToken(req);
-  if (!token) {
-    return res.status(401).json({
-      error: 'GitHub authentication required to view repository analysis jobs.',
-    });
-  }
 
   const state = getStore();
   const repo = state.repositories.find((r) => r.id === req.params.id);
@@ -608,8 +615,19 @@ apiRouter.get('/repositories/:id/analysis-jobs', async (req, res) => {
     return res.json({ isDemo: true, jobs: [] });
   }
 
+  if (repo.isPrivate && !token) {
+    return res.status(401).json({
+      error: 'GitHub authentication required to view private repository analysis jobs.',
+    });
+  }
+
   try {
     const access = await verifyAccess(repo.fullName, token);
+    if (access.isPrivate && !token) {
+      return res.status(401).json({
+        error: 'GitHub authentication required to view private repository analysis jobs.',
+      });
+    }
     if (
       access.isPrivate &&
       session &&

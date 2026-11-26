@@ -8,6 +8,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  ScanSearch,
   Settings,
   X,
 } from 'lucide-react';
@@ -28,6 +29,7 @@ interface SidebarProps {
 
 const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'analyze', label: 'Analyze', icon: ScanSearch },
   { id: 'repositories', label: 'Repositories', icon: FolderGit2 },
   { id: 'reviews', label: 'Code Reviews', icon: GitPullRequest },
   { id: 'agents', label: 'AI Agents', icon: Bot },
@@ -185,7 +187,10 @@ export function Sidebar({
         >
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const isActive = activeSection === item.id;
+            const isActive =
+              activeSection === item.id ||
+              (item.id === 'analyze' &&
+                (activeSection === 'repository-intelligence' || activeSection === 'pr-review'));
             return (
               <div key={item.id} className="relative group">
                 <button
